@@ -6,30 +6,56 @@ interface JobCardProps {
   action?: React.ReactNode;
 }
 
+const CATEGORY_ICONS: Record<string, string> = {
+  Electrician: "⚡",
+  Plumber:     "🔧",
+  Carpenter:   "🪚",
+  Painter:     "🎨",
+};
+
 export default function JobCard({ job, action }: JobCardProps) {
+  const icon = CATEGORY_ICONS[job.category] ?? "🔨";
+
   return (
-    <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-3">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="font-semibold text-gray-800">{job.category}</h3>
+    <div className="card rounded-3xl border border-gray-100 overflow-hidden mb-3">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-orange-50 to-amber-50 px-4 py-3 flex items-center justify-between border-b border-orange-100">
+        <div className="flex items-center gap-2.5">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#FF6B00] to-[#FF4500] flex items-center justify-center text-lg shadow-sm">
+            {icon}
+          </div>
+          <h3 className="font-bold text-gray-800 text-[15px]">{job.category}</h3>
+        </div>
         <StatusBadge status={job.status} />
       </div>
-      {job.scope && (
-        <p className="text-gray-600 text-sm mb-1">
-          <span className="font-medium">Scope:</span> {job.scope}
-        </p>
-      )}
-      {(job.price_min || job.price_max) && (
-        <p className="text-gray-600 text-sm mb-1">
-          <span className="font-medium">Price:</span> ₹{job.price_min} – ₹{job.price_max}
-        </p>
-      )}
-      {job.complexity && (
-        <p className="text-gray-600 text-sm mb-2 flex items-center gap-1">
-          <span className="font-medium">Complexity:</span>
-          <StatusBadge status={job.complexity} />
-        </p>
-      )}
-      {action && <div className="mt-3">{action}</div>}
+
+      {/* Body */}
+      <div className="px-4 py-3 space-y-2">
+        {job.scope && (
+          <div>
+            <span className="text-[11px] text-gray-400 font-bold uppercase tracking-wide">Scope</span>
+            <p className="text-gray-700 text-sm mt-0.5 leading-snug">{job.scope}</p>
+          </div>
+        )}
+
+        {(job.price_min != null || job.price_max != null) && (
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-gray-400 font-bold uppercase tracking-wide">Price</span>
+            <span className="text-sm font-bold text-gray-800">
+              ₹{job.price_min?.toLocaleString("en-IN")} – ₹{job.price_max?.toLocaleString("en-IN")}
+            </span>
+          </div>
+        )}
+
+        {job.complexity && (
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-gray-400 font-bold uppercase tracking-wide">Difficulty</span>
+            <StatusBadge status={job.complexity} />
+          </div>
+        )}
+
+        {action && <div className="pt-1">{action}</div>}
+      </div>
     </div>
   );
 }

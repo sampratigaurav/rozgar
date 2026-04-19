@@ -6,40 +6,35 @@ import Toast from "@/components/Toast";
 import { partnerAccept, getAdminStatus, type AdminStatus } from "@/lib/api";
 import { createClient } from "@/lib/supabase";
 
-interface ToastState {
-  message: string;
-  type: "success" | "error" | "info";
-}
+interface ToastState { message: string; type: "success" | "error" | "info"; }
+interface ModalState  { jobId: string; workerId: string; partnerId: string; }
+interface AcceptResult { commission: number; }
 
-interface ModalState {
-  jobId: string;
-  workerId: string;
-  partnerId: string;
-}
-
-interface AcceptResult {
-  commission: number;
+function StatCard({ label, value, icon, accent, bg }: { label: string; value: number; icon: string; accent: string; bg: string }) {
+  return (
+    <div className={`card rounded-3xl p-4 border ${bg} text-center`}>
+      <div className="text-2xl mb-1">{icon}</div>
+      <p className={`text-3xl font-black ${accent}`}>{value}</p>
+      <p className="text-gray-500 text-xs mt-1 font-medium">{label}</p>
+    </div>
+  );
 }
 
 export default function PartnerDashboard() {
-  const router = useRouter();
+  const router   = useRouter();
   const supabase = createClient();
 
-  const [status, setStatus] = useState<AdminStatus | null>(null);
+  const [status,        setStatus]        = useState<AdminStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
-  const [toast, setToast] = useState<ToastState | null>(null);
-  const [modal, setModal] = useState<ModalState | null>(null);
-  const [accepting, setAccepting] = useState(false);
-  const [result, setResult] = useState<AcceptResult | null>(null);
-  const [manualJobId, setManualJobId] = useState("");
+  const [toast,         setToast]         = useState<ToastState | null>(null);
+  const [modal,         setModal]         = useState<ModalState | null>(null);
+  const [accepting,     setAccepting]     = useState(false);
+  const [result,        setResult]        = useState<AcceptResult | null>(null);
+  const [manualJobId,   setManualJobId]   = useState("");
 
-  const showToast = (message: string, type: ToastState["type"]) =>
-    setToast({ message, type });
+  const showToast = (message: string, type: ToastState["type"]) => setToast({ message, type });
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push("/");
-  };
+  const handleLogout = async () => { await supabase.auth.signOut(); router.push("/"); };
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -59,10 +54,7 @@ export default function PartnerDashboard() {
   }, [fetchStatus]);
 
   const openModal = () => {
-    if (!manualJobId.trim()) {
-      showToast("Enter a Job ID first", "error");
-      return;
-    }
+    if (!manualJobId.trim()) { showToast("Enter a Job ID first", "error"); return; }
     setModal({ jobId: manualJobId.trim(), workerId: "", partnerId: "" });
     setResult(null);
   };
@@ -75,16 +67,9 @@ export default function PartnerDashboard() {
     }
     setAccepting(true);
     try {
-      const res = await partnerAccept(
-        modal.jobId,
-        modal.workerId,
-        modal.partnerId
-      );
+      const res = await partnerAccept(modal.jobId, modal.workerId, modal.partnerId);
       setResult({ commission: res.data.commission });
-      showToast(
-        `Job accepted! ₹${res.data.commission} commission credited.`,
-        "success"
-      );
+      showToast(`Job accepted! ₹${res.data.commission} commission credited.`, "success");
       fetchStatus();
     } catch (e: unknown) {
       showToast(e instanceof Error ? e.message : "Accept failed", "error");
@@ -94,181 +79,148 @@ export default function PartnerDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-white">
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      )}
+    <div className="min-h-screen bg-[#F5F5F7]">
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 
-      {/* Dashboard header */}
-      <div className="bg-green-50 border-b border-green-100 px-4 py-3 flex items-center justify-between max-w-lg mx-auto">
-        <p className="text-sm font-semibold text-gray-700">🏪 Partner</p>
-        <button
-          onClick={handleLogout}
-          className="text-sm text-red-500 font-semibold py-1 px-3 rounded-lg border border-red-200 min-h-[36px]"
-        >
-          Logout
-        </button>
+      {/* Header */}
+      <div className="sticky top-0 z-30 glass border-b border-white/40 shadow-sm">
+        <div className="max-w-lg mx-auto px-4 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center text-sm shadow-sm">
+              🏪
+            </div>
+            <p className="text-sm font-bold text-gray-800">Partner Dashboard</p>
+          </div>
+          <button onClick={handleLogout} className="text-xs text-red-500 font-bold py-1.5 px-3 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 transition-all">
+            Logout
+          </button>
+        </div>
       </div>
 
-      <div className="px-4 py-6 max-w-lg mx-auto">
-        <h1 className="text-2xl font-bold text-[#FF6B00] mb-1">
-          Partner Dashboard
-        </h1>
-        <p className="text-gray-500 text-sm mb-6">
-          Accept jobs on behalf of workers and earn ₹15 commission per job.
-        </p>
+      <div className="px-4 py-6 max-w-lg mx-auto space-y-5">
+        {/* Earnings Banner */}
+        <div className="card rounded-3xl overflow-hidden animate-slide-up">
+          <div className="bg-gradient-to-r from-emerald-500 to-green-600 px-5 py-5">
+            <p className="text-white/70 text-sm font-medium">Your Earnings</p>
+            <p className="text-white font-black text-3xl mt-0.5">₹15 <span className="text-base font-medium opacity-70">per job placed</span></p>
+          </div>
+          <div className="px-5 py-3 bg-gradient-to-r from-emerald-50 to-green-50 border-t border-emerald-100">
+            <p className="text-emerald-700 text-xs font-medium">Accept jobs near you and earn commission instantly</p>
+          </div>
+        </div>
 
-        {/* Live Status Cards */}
-        <div className="grid grid-cols-2 gap-3 mb-6">
+        {/* Live stats */}
+        <div className="animate-slide-up delay-100">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">Live Status</p>
+            {!statusLoading && (
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                <span className="text-xs text-gray-400 font-medium">Updates every 5s</span>
+              </div>
+            )}
+          </div>
+
           {statusLoading ? (
-            <div className="col-span-2 text-center py-6 text-gray-400 animate-pulse">
-              Loading status…
+            <div className="grid grid-cols-2 gap-3">
+              {[1,2,3,4].map(i => <div key={i} className="skeleton h-24 rounded-3xl" />)}
             </div>
           ) : status ? (
-            <>
-              <StatCard
-                label="Pending Jobs"
-                value={status.pending_jobs}
-                accent="text-[#FF6B00]"
-              />
-              <StatCard
-                label="Total Workers"
-                value={status.total_workers}
-                accent="text-blue-600"
-              />
-              <StatCard
-                label="Available Workers"
-                value={status.available_workers}
-                accent="text-green-600"
-              />
-              <StatCard
-                label="Total Jobs"
-                value={status.total_jobs}
-                accent="text-gray-700"
-              />
-            </>
-          ) : (
-            <div className="col-span-2 text-center py-4 text-gray-400">
-              Could not load status
+            <div className="grid grid-cols-2 gap-3">
+              <StatCard label="Pending Jobs"       value={status.pending_jobs}       icon="⏳" accent="text-[#FF6B00]"  bg="border-orange-100" />
+              <StatCard label="Available Workers"  value={status.available_workers}  icon="✅" accent="text-green-600" bg="border-green-100" />
+              <StatCard label="Total Workers"      value={status.total_workers}      icon="👷" accent="text-blue-600"  bg="border-blue-100" />
+              <StatCard label="Total Jobs"         value={status.total_jobs}         icon="📋" accent="text-gray-700"  bg="border-gray-100" />
             </div>
+          ) : (
+            <div className="card rounded-3xl p-4 text-center text-gray-400 text-sm">Could not load status</div>
           )}
         </div>
 
-        {/* Accept on behalf of worker */}
-        <div className="bg-orange-50 border border-orange-200 rounded-2xl p-5 mb-4">
-          <h2 className="font-bold text-gray-800 mb-3">
-            Accept Job on Behalf of Worker
-          </h2>
-          <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
-            Job ID
-          </label>
+        {/* Accept form */}
+        <div className="card rounded-3xl p-5 animate-slide-up delay-200">
+          <h2 className="font-black text-gray-900 mb-1">Accept on Behalf</h2>
+          <p className="text-gray-400 text-xs mb-4">Help a nearby worker accept a job and earn your commission</p>
+
+          <label className="block text-xs font-bold text-gray-500 mb-1.5 uppercase tracking-wide">Job ID</label>
           <input
             type="text"
-            placeholder="Paste job ID"
+            placeholder="Paste job ID here"
             value={manualJobId}
             onChange={(e) => setManualJobId(e.target.value)}
-            className="w-full border-2 border-gray-300 rounded-xl px-4 py-3 text-sm mb-4 focus:border-[#FF6B00] outline-none"
+            className="input-field mb-4"
           />
-          <button
-            onClick={openModal}
-            className="w-full bg-[#FF6B00] text-white rounded-xl py-3 font-bold text-base min-h-[48px] active:bg-[#CC5500]"
-          >
-            🏪 Accept on Behalf of Worker
+          <button onClick={openModal} className="btn-primary w-full py-3.5 text-sm min-h-[52px]">
+            <span className="flex items-center justify-center gap-2">
+              <span>🏪</span> Accept on Behalf of Worker
+            </span>
           </button>
         </div>
       </div>
 
       {/* Modal */}
       {modal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end sm:items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-xl">
-            <h3 className="font-bold text-lg mb-4">Enter Details</h3>
-            <p className="text-xs text-gray-500 mb-3">
-              Job ID:{" "}
-              <span className="font-mono text-gray-700">{modal.jobId}</span>
-            </p>
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4"
+          onClick={(e) => e.target === e.currentTarget && setModal(null)}
+        >
+          <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl animate-slide-up">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-black text-gray-900 text-lg">Enter Details</h3>
+              <button onClick={() => setModal(null)} className="w-8 h-8 rounded-xl bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 transition-all text-sm font-bold">×</button>
+            </div>
 
-            <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
-              Worker ID
-            </label>
-            <input
-              type="text"
-              placeholder="Worker's UUID"
-              value={modal.workerId}
-              onChange={(e) =>
-                setModal((m) => m && { ...m, workerId: e.target.value })
-              }
-              className="w-full border-2 border-gray-300 rounded-xl px-4 py-3 text-sm mb-4 focus:border-[#FF6B00] outline-none"
-            />
+            <div className="bg-gray-50 rounded-2xl px-4 py-2 mb-4">
+              <p className="text-[11px] text-gray-400 font-bold uppercase tracking-wide">Job ID</p>
+              <p className="font-mono text-xs text-gray-700 break-all">{modal.jobId}</p>
+            </div>
 
-            <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
-              Partner ID (your ID)
-            </label>
-            <input
-              type="text"
-              placeholder="Your partner UUID"
-              value={modal.partnerId}
-              onChange={(e) =>
-                setModal((m) => m && { ...m, partnerId: e.target.value })
-              }
-              className="w-full border-2 border-gray-300 rounded-xl px-4 py-3 text-sm mb-5 focus:border-[#FF6B00] outline-none"
-            />
+            <div className="space-y-3 mb-5">
+              <div>
+                <label className="block text-xs font-bold text-gray-500 mb-1.5 uppercase tracking-wide">Worker ID</label>
+                <input
+                  type="text"
+                  placeholder="Worker's UUID"
+                  value={modal.workerId}
+                  onChange={(e) => setModal(m => m && { ...m, workerId: e.target.value })}
+                  className="input-field"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-500 mb-1.5 uppercase tracking-wide">Partner ID (Your ID)</label>
+                <input
+                  type="text"
+                  placeholder="Your partner UUID"
+                  value={modal.partnerId}
+                  onChange={(e) => setModal(m => m && { ...m, partnerId: e.target.value })}
+                  className="input-field"
+                />
+              </div>
+            </div>
 
             {result ? (
-              <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4 text-center">
-                <p className="text-green-700 font-bold text-lg">
-                  ₹{result.commission} Commission Credited!
-                </p>
-                <p className="text-green-600 text-sm mt-1">
-                  Job matched successfully.
-                </p>
+              <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-2xl p-4 mb-4 text-center">
+                <span className="text-4xl block mb-2">🎉</span>
+                <p className="text-green-700 font-black text-2xl">₹{result.commission} Credited!</p>
+                <p className="text-green-600 text-sm mt-1">Job matched successfully.</p>
               </div>
             ) : (
-              <button
-                onClick={handleAccept}
-                disabled={accepting}
-                className="w-full bg-[#FF6B00] text-white rounded-xl py-3 font-bold text-base min-h-[48px] mb-3 disabled:opacity-60"
-              >
+              <button onClick={handleAccept} disabled={accepting} className="btn-primary w-full py-3.5 text-sm min-h-[52px] mb-3">
                 {accepting ? (
                   <span className="flex items-center justify-center gap-2">
-                    <span className="animate-spin">⏳</span> Processing…
+                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Processing…
                   </span>
-                ) : (
-                  "✅ Confirm Accept"
-                )}
+                ) : "✅ Confirm Accept"}
               </button>
             )}
 
-            <button
-              onClick={() => setModal(null)}
-              className="w-full border-2 border-gray-200 text-gray-600 rounded-xl py-3 font-semibold text-base min-h-[48px]"
-            >
+            <button onClick={() => setModal(null)} className="btn-ghost w-full py-3 text-sm min-h-[44px]">
               Close
             </button>
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  accent,
-}: {
-  label: string;
-  value: number;
-  accent: string;
-}) {
-  return (
-    <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4 text-center">
-      <p className={`text-3xl font-bold ${accent}`}>{value}</p>
-      <p className="text-gray-500 text-xs mt-1">{label}</p>
     </div>
   );
 }
