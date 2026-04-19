@@ -1,9 +1,10 @@
 """Job lifecycle endpoints — create, broadcast, fetch, complete."""
 import uuid as _uuid
 import httpx
-from fastapi import APIRouter, Form, UploadFile, File, HTTPException
+from fastapi import APIRouter, Form, UploadFile, File, HTTPException, Depends
 from database import supabase
 from config import AI_SERVICE_URL, SUPABASE_URL, SUPABASE_ANON_KEY
+from dependencies import get_current_user
 
 router = APIRouter()
 _AI_TIMEOUT = 40.0
@@ -41,6 +42,7 @@ async def create_job(
     category: str = Form(...),
     pin_code: str = Form(...),
     photo: UploadFile = File(...),
+    user=Depends(get_current_user),
 ):
     """
     1. Read image bytes
@@ -106,7 +108,7 @@ async def create_job(
 
 
 @router.post("/broadcast/{job_id}")
-async def broadcast_job(job_id: str):
+async def broadcast_job(job_id: str, user=Depends(get_current_user)):
     """Notify all available workers in job's pin_code via WhatsApp or SMS."""
     try:
         jr = supabase.table("jobs").select("*").eq("id", job_id).single().execute()
@@ -175,7 +177,7 @@ async def broadcast_job(job_id: str):
 
 
 @router.get("/list")
-async def list_jobs(status: str | None = None, pin_code: str | None = None, limit: int = 50):
+async def list_jobs(status: str | None = None, pin_code: str | None = None, limit: int = 50, user=Depends(get_current_user)):
     """List jobs with optional filters."""
     try:
         q = supabase.table("jobs").select("*").order("created_at", desc=True).limit(limit)
@@ -188,7 +190,7 @@ async def list_jobs(status: str | None = None, pin_code: str | None = None, limi
 
 
 @router.get("/{job_id}")
-async def get_job(job_id: str):
+async def get_job(job_id: str, user=Depends(get_current_user)):
     """Fetch a single job; includes matched_worker if matched."""
     try:
         jr = supabase.table("jobs").select("*").eq("id", job_id).single().execute()

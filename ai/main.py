@@ -1,6 +1,7 @@
 # FastAPI entry point — exposes AI analysis and multi-channel notification endpoints.
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 
 from gemini import analyse_job_photo
 from twilio_whatsapp import send_whatsapp
@@ -32,14 +33,15 @@ async def analyse(
     """Accept a job photo and category; return Gemini Vision scope/pricing/complexity."""
     try:
         image_bytes = await image.read()
-        result = analyse_job_photo(image_bytes, category)
+        # Run the synchronous Gemini call in a separate thread so it doesn't block the async event loop
+        result = await run_in_threadpool(analyse_job_photo, image_bytes, category)
         return {"success": True, "result": result}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 422
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @app.post("/notify/whatsapp")
-async def notify_whatsapp(
+def notify_whatsapp(
     to_number: str = Form(...),
     job_photo_url: str = Form(...),
     scope: str = Form(...),
@@ -59,11 +61,11 @@ async def notify_whatsapp(
         )
         return {"success": True, "result": sid}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 422
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @app.post("/notify/sms")
-async def notify_sms(
+def notify_sms(
     to_number: str = Form(...),
     message: str = Form(...),
 ):
@@ -72,11 +74,11 @@ async def notify_sms(
         sid = send_sms(to_number=to_number, message=message)
         return {"success": True, "result": sid}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 422
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @app.post("/notify/ivr")
-async def notify_ivr(
+def notify_ivr(
     to_number: str = Form(...),
     job_description: str = Form(...),
     language: str = Form(...),
@@ -90,4 +92,4 @@ async def notify_ivr(
         )
         return {"success": True, "result": sid}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 422
+        raise HTTPException(status_code=422, detail=str(e))

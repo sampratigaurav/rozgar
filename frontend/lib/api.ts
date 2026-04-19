@@ -1,3 +1,5 @@
+import { createClient } from "./supabase";
+
 const BACKEND_URL = (process.env.NEXT_PUBLIC_BACKEND_URL ?? "").replace(/\/$/, "");
 const AI_URL      = (process.env.NEXT_PUBLIC_AI_URL      ?? "").replace(/\/$/, "");
 
@@ -51,6 +53,13 @@ export interface AdminStatus {
 // Core fetch helper
 // ─────────────────────────────────────────────────────────────
 
+async function getAuthHeaders(): Promise<HeadersInit> {
+  const supabase = createClient();
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function handleResponse<T>(res: Response): Promise<T> {
   let body: Record<string, unknown>;
   try {
@@ -72,14 +81,8 @@ async function handleResponse<T>(res: Response): Promise<T> {
 }
 
 // ─────────────────────────────────────────────────────────────
-// AI
-// ─────────────────────────────────────────────────────────────
-
-export async function analyseImage(image: File, category: string): Promise<AIAnalysisResult> {
-  const form = new FormData();
-  form.append("image", image);
-  form.append("category", category);
-  const res  = await fetch(`${AI_URL}/ai/analyse`, { method: "POST", body: form });
+// AIheaders = await getAuthHeaders();
+  const res  = await fetch(`${AI_URL}/ai/analyse`, { method: "POST", body: form, headers });
   const body = await res.json().catch(() => { throw new Error("AI service unavailable"); });
   if (!res.ok || !body.success) throw new Error(body.error ?? "AI analysis failed");
   return body.result as AIAnalysisResult;
@@ -98,19 +101,22 @@ export async function createJob(
   form.append("category", category);
   form.append("pin_code",  pin_code);
   form.append("photo",     photo);
-  const res = await fetch(`${BACKEND_URL}/jobs/create`, { method: "POST", body: form });
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/jobs/create`, { method: "POST", body: form, headers });
   return handleResponse(res);
 }
 
 export async function broadcastJob(
   job_id: string,
 ): Promise<{ success: boolean; data: { job_id: string; notified_count: number } }> {
-  const res = await fetch(`${BACKEND_URL}/jobs/broadcast/${job_id}`, { method: "POST" });
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/jobs/broadcast/${job_id}`, { method: "POST", headers });
   return handleResponse(res);
 }
 
 export async function getJob(job_id: string): Promise<{ success: boolean; data: Job }> {
-  const res = await fetch(`${BACKEND_URL}/jobs/${job_id}`);
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/jobs/${job_id}`, { headers });
   return handleResponse(res);
 }
 
@@ -123,14 +129,16 @@ export async function listJobs(params?: {
   if (params?.status)   qs.set("status",   params.status);
   if (params?.pin_code) qs.set("pin_code", params.pin_code);
   if (params?.limit)    qs.set("limit",    String(params.limit));
-  const res = await fetch(`${BACKEND_URL}/jobs/list?${qs}`);
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/jobs/list?${qs}`, { headers });
   return handleResponse(res);
 }
 
 export async function completeJob(
   job_id: string,
 ): Promise<{ success: boolean; data: { message: string; job_id: string } }> {
-  const res = await fetch(`${BACKEND_URL}/jobs/${job_id}/complete`, { method: "PATCH" });
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/jobs/${job_id}/complete`, { method: "PATCH", headers });
   return handleResponse(res);
 }
 
@@ -142,17 +150,20 @@ export async function acceptJob(
   job_id: string,
   worker_id: string,
 ): Promise<{ success: boolean; data: { message: string; job_id: string } }> {
-  const form = new FormData();
-  form.append("job_id",    job_id);
-  form.append("worker_id", worker_id);
-  const res = await fetch(`${BACKEND_URL}/workers/accept`, { method: "POST", body: form });
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/workers/accept`, { 
+    method: "POST", 
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id, worker_id })
+  });
   return handleResponse(res);
 }
 
 export async function getAvailableWorkers(
   pin_code: string,
 ): Promise<{ success: boolean; data: Worker[] }> {
-  const res = await fetch(`${BACKEND_URL}/workers/available/${pin_code}`);
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/workers/available/${pin_code}`, { headers });
   return handleResponse(res);
 }
 
@@ -165,11 +176,12 @@ export async function partnerAccept(
   worker_id: string,
   partner_id: string,
 ): Promise<{ success: boolean; data: { message: string; commission: number } }> {
-  const form = new FormData();
-  form.append("job_id",     job_id);
-  form.append("worker_id",  worker_id);
-  form.append("partner_id", partner_id);
-  const res = await fetch(`${BACKEND_URL}/partners/accept`, { method: "POST", body: form });
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/partners/accept`, { 
+    method: "POST", 
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id, worker_id, partner_id })
+  });
   return handleResponse(res);
 }
 
@@ -178,10 +190,20 @@ export async function partnerAccept(
 // ─────────────────────────────────────────────────────────────
 
 export async function seedWorkers(): Promise<{ success: boolean; data: string }> {
-  const res = await fetch(`${BACKEND_URL}/admin/seed`, { method: "POST" });
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/admin/seed`, { method: "POST", headers });
   return handleResponse(res);
 }
 
+export async function resetDemo(): Promise<{ success: boolean; data: string }> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/admin/reset`, { method: "POST", headers });
+  return handleResponse(res);
+}
+
+export async function getAdminStatus(): Promise<{ success: boolean; data: AdminStatus }> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${BACKEND_URL}/admin/status`, { headers }
 export async function resetDemo(): Promise<{ success: boolean; data: string }> {
   const res = await fetch(`${BACKEND_URL}/admin/reset`, { method: "POST" });
   return handleResponse(res);

@@ -1,14 +1,16 @@
 """Worker endpoints — accept jobs, list available workers."""
-from fastapi import APIRouter, Form, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from database import supabase
+from dependencies import get_current_user
+from schemas import AcceptJobRequest
 
 router = APIRouter()
 
 
 @router.post("/accept")
 async def accept_job(
-    job_id:    str = Form(...),
-    worker_id: str = Form(...),
+    request: AcceptJobRequest,
+    user=Depends(get_current_user),
 ):
     """
     Worker accepts a job.
@@ -16,8 +18,8 @@ async def accept_job(
     - Validates worker exists and is available
     - Atomically updates both rows
     """
-    if not job_id.strip() or not worker_id.strip():
-        raise HTTPException(422, {"success": False, "error": "job_id and worker_id are required"})
+    job_id = request.job_id
+    worker_id = request.worker_id
     try:
         jr = supabase.table("jobs").select("id,status,matched_worker_id").eq("id", job_id).single().execute()
         if not jr.data:
@@ -45,7 +47,7 @@ async def accept_job(
 
 
 @router.get("/available/{pin_code}")
-async def available_workers(pin_code: str):
+async def available_workers(pin_code: str, user=Depends(get_current_user)):
     """List workers available in a pin_code."""
     try:
         r = (
@@ -61,7 +63,7 @@ async def available_workers(pin_code: str):
 
 
 @router.get("/{worker_id}")
-async def get_worker(worker_id: str):
+async def get_worker(worker_id: str, user=Depends(get_current_user)):
     """Get a single worker by ID."""
     try:
         r = supabase.table("workers").select("*").eq("id", worker_id).single().execute()

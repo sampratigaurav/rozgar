@@ -1,7 +1,9 @@
 """Partner endpoints — partners accepting jobs on behalf of workers."""
 
-from fastapi import APIRouter, Form, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from database import supabase
+from dependencies import get_current_user
+from schemas import PartnerAcceptJobRequest
 
 router = APIRouter()
 
@@ -10,9 +12,8 @@ _PARTNER_COMMISSION = 15
 
 @router.post("/accept")
 async def partner_accept(
-    job_id: str = Form(...),
-    worker_id: str = Form(...),
-    partner_id: str = Form(...),
+    request: PartnerAcceptJobRequest,
+    user=Depends(get_current_user),
 ):
     """
     Partner accepts a job on behalf of a worker.
@@ -20,6 +21,9 @@ async def partner_accept(
     Behaves identically to a direct worker accept, but also credits the partner's
     wallet with a fixed commission of ₹15.
     """
+    job_id = request.job_id
+    worker_id = request.worker_id
+    partner_id = request.partner_id
     try:
         supabase.table("jobs").update(
             {"status": "matched", "matched_worker_id": worker_id}

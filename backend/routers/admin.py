@@ -1,7 +1,8 @@
 """Admin endpoints — seed demo data, reset state, and view counts."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from database import supabase
+from dependencies import get_current_user
 
 router = APIRouter()
 
@@ -37,7 +38,7 @@ _SEED_WORKERS = [
 
 
 @router.post("/seed")
-async def seed_workers():
+async def seed_workers(user=Depends(get_current_user)):
     """
     Insert 3 demo workers for pin_code 560001 into the workers table.
 
@@ -53,7 +54,7 @@ async def seed_workers():
 
 
 @router.post("/reset")
-async def reset_demo():
+async def reset_demo(user=Depends(get_current_user)):
     """
     Reset the demo environment.
 
@@ -72,7 +73,7 @@ async def reset_demo():
 
 
 @router.get("/status")
-async def admin_status():
+async def admin_status(user=Depends(get_current_user)):
     """
     Return aggregate counts for workers, jobs, and partners.
 
