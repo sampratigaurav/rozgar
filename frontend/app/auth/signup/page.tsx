@@ -7,10 +7,10 @@ import { createClient } from "@/lib/supabase";
 
 type AuthMode = "phone" | "email";
 
-const ROLE_LABELS: Record<string, string> = {
-  customer: "Customer",
-  worker: "Worker",
-  partner: "Partner",
+const ROLE_META: Record<string, { label: string; icon: string; color: string }> = {
+  customer: { label: "Customer",      icon: "🏠", color: "from-orange-500 to-red-500" },
+  worker:   { label: "Worker",        icon: "🔧", color: "from-blue-500 to-indigo-600" },
+  partner:  { label: "Shop Partner",  icon: "🏪", color: "from-emerald-500 to-green-600" },
 };
 
 function SignupContent() {
@@ -18,6 +18,8 @@ function SignupContent() {
   const role = searchParams.get("role") ?? "customer";
   const router = useRouter();
   const supabase = createClient();
+
+  const roleMeta = ROLE_META[role] ?? ROLE_META.customer;
 
   const [mode, setMode] = useState<AuthMode>("phone");
   const [phone, setPhone] = useState("");
@@ -29,44 +31,23 @@ function SignupContent() {
     e.preventDefault();
     setLoading(true);
     setError("");
-
     try {
       if (mode === "phone") {
-        const { error: otpError } = await supabase.auth.signInWithOtp({
-          phone,
-          options: { data: { role } },
-        });
-
-        if (otpError) {
-          // Twilio not configured — auto-switch to email
-          if (
-            otpError.message.toLowerCase().includes("twilio") ||
-            otpError.message.toLowerCase().includes("sms") ||
-            otpError.message.toLowerCase().includes("phone provider")
-          ) {
+        const { error: err } = await supabase.auth.signInWithOtp({ phone, options: { data: { role } } });
+        if (err) {
+          if (err.message.toLowerCase().includes("twilio") || err.message.toLowerCase().includes("sms") || err.message.toLowerCase().includes("phone provider")) {
             setMode("email");
-            setError(
-              "Phone OTP is not available. Please use email instead."
-            );
+            setError("Phone OTP is not available. Please use email instead.");
             setLoading(false);
             return;
           }
-          throw otpError;
+          throw err;
         }
-
-        router.push(
-          `/auth/verify?phone=${encodeURIComponent(phone)}&role=${role}&mode=phone`
-        );
+        router.push(`/auth/verify?phone=${encodeURIComponent(phone)}&role=${role}&mode=phone`);
       } else {
-        const { error: otpError } = await supabase.auth.signInWithOtp({
-          email,
-          options: { data: { role } },
-        });
-        if (otpError) throw otpError;
-
-        router.push(
-          `/auth/verify?email=${encodeURIComponent(email)}&role=${role}&mode=email`
-        );
+        const { error: err } = await supabase.auth.signInWithOtp({ email, options: { data: { role } } });
+        if (err) throw err;
+        router.push(`/auth/verify?email=${encodeURIComponent(email)}&role=${role}&mode=email`);
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -76,125 +57,108 @@ function SignupContent() {
   };
 
   return (
-    <div className="px-4 py-8 max-w-sm mx-auto">
-      <div className="mb-6">
-        <Link href="/" className="text-[#FF6B00] text-sm">
+    <div className="min-h-screen bg-[#F5F5F7] flex flex-col">
+      <div className="h-1 bg-gradient-to-r from-[#FF6B00] to-[#FF4500]" />
+
+      <div className="flex-1 flex flex-col justify-center px-4 py-8 max-w-sm mx-auto w-full">
+        <Link href="/" className="flex items-center gap-1 text-[#FF6B00] text-sm font-semibold mb-8 w-fit hover:gap-2 transition-all">
           ← Back
         </Link>
-        <h1 className="text-2xl font-bold text-gray-800 mt-3 mb-1">
-          Sign up as {ROLE_LABELS[role] ?? role}
-        </h1>
-        <p className="text-gray-500 text-sm">
-          We'll send a one-time code to verify you.
+
+        <div className="card rounded-3xl p-6">
+          {/* Role pill */}
+          <div className={`inline-flex items-center gap-2 bg-gradient-to-r ${roleMeta.color} text-white text-xs font-bold px-3 py-1.5 rounded-xl mb-4`}>
+            <span>{roleMeta.icon}</span>
+            <span>Signing up as {roleMeta.label}</span>
+          </div>
+
+          <h1 className="text-2xl font-black text-gray-900 mb-1">Create account</h1>
+          <p className="text-gray-500 text-sm mb-6">We'll send a one-time code to verify you.</p>
+
+          {/* Mode toggle */}
+          <div className="flex rounded-2xl overflow-hidden bg-gray-100 p-1 mb-5 gap-1">
+            {(["phone", "email"] as AuthMode[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => { setMode(m); setError(""); }}
+                className={`flex-1 py-2 text-sm font-bold rounded-xl transition-all ${
+                  mode === m
+                    ? "bg-white text-gray-900 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {m === "phone" ? "📱 Phone" : "✉️ Email"}
+              </button>
+            ))}
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-gray-500 mb-1.5 uppercase tracking-wide">
+                {mode === "phone" ? "Phone Number" : "Email Address"}
+              </label>
+              {mode === "phone" ? (
+                <>
+                  <input
+                    type="tel"
+                    placeholder="+91 98765 43210"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    required
+                    className="input-field"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Include country code, e.g. +91</p>
+                </>
+              ) : (
+                <input
+                  type="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  className="input-field"
+                />
+              )}
+            </div>
+
+            {error && (
+              <div className="bg-red-50 border border-red-200 rounded-2xl p-3 flex items-start gap-2">
+                <span className="text-red-500 text-sm mt-0.5">⚠</span>
+                <p className="text-red-600 text-sm">{error}</p>
+              </div>
+            )}
+
+            <button type="submit" disabled={loading} className="btn-primary w-full py-3.5 text-sm min-h-[52px]">
+              {loading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Sending OTP…
+                </span>
+              ) : "Send OTP →"}
+            </button>
+          </form>
+        </div>
+
+        <p className="text-center text-sm text-gray-500 mt-5">
+          Already have an account?{" "}
+          <Link href={`/auth/login?role=${role}`} className="text-[#FF6B00] font-bold hover:underline">
+            Login
+          </Link>
         </p>
       </div>
-
-      {/* Mode toggle */}
-      <div className="flex rounded-xl overflow-hidden border-2 border-gray-200 mb-5">
-        <button
-          type="button"
-          onClick={() => { setMode("phone"); setError(""); }}
-          className={`flex-1 py-2.5 text-sm font-semibold transition-colors ${
-            mode === "phone"
-              ? "bg-[#FF6B00] text-white"
-              : "text-gray-500 bg-white"
-          }`}
-        >
-          📱 Phone
-        </button>
-        <button
-          type="button"
-          onClick={() => { setMode("email"); setError(""); }}
-          className={`flex-1 py-2.5 text-sm font-semibold transition-colors ${
-            mode === "email"
-              ? "bg-[#FF6B00] text-white"
-              : "text-gray-500 bg-white"
-          }`}
-        >
-          ✉️ Email
-        </button>
-      </div>
-
-      <form onSubmit={handleSubmit}>
-        {mode === "phone" ? (
-          <div className="mb-4">
-            <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
-              Phone Number
-            </label>
-            <input
-              type="tel"
-              placeholder="+91 98765 43210"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              required
-              className="w-full border-2 border-gray-300 rounded-xl px-4 py-3 text-base focus:border-[#FF6B00] outline-none"
-            />
-            <p className="text-xs text-gray-400 mt-1">
-              Include country code, e.g. +91
-            </p>
-          </div>
-        ) : (
-          <div className="mb-4">
-            <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
-              Email Address
-            </label>
-            <input
-              type="email"
-              placeholder="you@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              className="w-full border-2 border-gray-300 rounded-xl px-4 py-3 text-base focus:border-[#FF6B00] outline-none"
-            />
-          </div>
-        )}
-
-        {error && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-4">
-            <p className="text-red-600 text-sm">{error}</p>
-          </div>
-        )}
-
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full bg-[#FF6B00] text-white rounded-xl py-4 font-bold text-base min-h-[52px] disabled:opacity-60"
-        >
-          {loading ? (
-            <span className="flex items-center justify-center gap-2">
-              <span className="animate-spin">⏳</span> Sending OTP…
-            </span>
-          ) : (
-            "Send OTP →"
-          )}
-        </button>
-      </form>
-
-      <p className="text-center text-sm text-gray-500 mt-5">
-        Already have an account?{" "}
-        <Link
-          href={`/auth/login?role=${role}`}
-          className="text-[#FF6B00] font-semibold"
-        >
-          Login
-        </Link>
-      </p>
     </div>
   );
 }
 
 export default function SignupPage() {
   return (
-    <div className="min-h-screen bg-white">
-      <Suspense
-        fallback={
-          <div className="flex items-center justify-center min-h-screen text-gray-400">
-            <span className="animate-pulse text-4xl">⏳</span>
-          </div>
-        }
-      >
-        <SignupContent />
-      </Suspense>
-    </div>
+    <Suspense fallback={
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="w-8 h-8 border-2 border-[#FF6B00]/30 border-t-[#FF6B00] rounded-full animate-spin" />
+      </div>
+    }>
+      <SignupContent />
+    </Suspense>
   );
 }

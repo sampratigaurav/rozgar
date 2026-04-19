@@ -1,12 +1,56 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase";
 
 type AuthMode = "phone" | "email";
 type Step = "contact" | "otp";
+
+function OTPBoxes({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  const focus = (i: number) => inputRefs.current[i]?.focus();
+
+  const handleKey = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Backspace" && !value[i] && i > 0) focus(i - 1);
+  };
+
+  const handleChange = (i: number, e: React.ChangeEvent<HTMLInputElement>) => {
+    const digit = e.target.value.replace(/\D/g, "").slice(-1);
+    const arr = value.split("").concat(Array(6).fill("")).slice(0, 6);
+    arr[i] = digit;
+    onChange(arr.join(""));
+    if (digit && i < 5) focus(i + 1);
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
+    onChange(pasted);
+    focus(Math.min(pasted.length, 5));
+    e.preventDefault();
+  };
+
+  return (
+    <div className="flex gap-2 justify-center" onPaste={handlePaste}>
+      {Array.from({ length: 6 }, (_, i) => (
+        <input
+          key={i}
+          ref={(el) => { inputRefs.current[i] = el; }}
+          type="tel"
+          inputMode="numeric"
+          maxLength={1}
+          value={value[i] ?? ""}
+          onChange={(e) => handleChange(i, e)}
+          onKeyDown={(e) => handleKey(i, e)}
+          autoFocus={i === 0}
+          className={`otp-box ${value[i] ? "filled" : ""}`}
+        />
+      ))}
+    </div>
+  );
+}
 
 function LoginContent() {
   const searchParams = useSearchParams();
@@ -28,29 +72,22 @@ function LoginContent() {
     e.preventDefault();
     setLoading(true);
     setError("");
-
     try {
       if (mode === "phone") {
-        const { error: otpError } = await supabase.auth.signInWithOtp({ phone });
-
-        if (otpError) {
-          if (
-            otpError.message.toLowerCase().includes("twilio") ||
-            otpError.message.toLowerCase().includes("sms") ||
-            otpError.message.toLowerCase().includes("phone provider")
-          ) {
+        const { error: err } = await supabase.auth.signInWithOtp({ phone });
+        if (err) {
+          if (err.message.toLowerCase().includes("twilio") || err.message.toLowerCase().includes("sms") || err.message.toLowerCase().includes("phone provider")) {
             setMode("email");
             setError("Phone OTP unavailable. Please use email instead.");
             setLoading(false);
             return;
           }
-          throw otpError;
+          throw err;
         }
       } else {
-        const { error: otpError } = await supabase.auth.signInWithOtp({ email });
-        if (otpError) throw otpError;
+        const { error: err } = await supabase.auth.signInWithOtp({ email });
+        if (err) throw err;
       }
-
       setStep("otp");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to send OTP");
@@ -64,30 +101,19 @@ function LoginContent() {
     if (token.length !== 6) { setError("Enter the 6-digit code"); return; }
     setLoading(true);
     setError("");
-
     try {
-      const verifyPayload =
-        mode === "phone"
-          ? { phone: contact, token, type: "sms" as const }
-          : { email: contact, token, type: "email" as const };
+      const payload = mode === "phone"
+        ? { phone: contact, token, type: "sms" as const }
+        : { email: contact, token, type: "email" as const };
 
-      const { data, error: verifyError } =
-        await supabase.auth.verifyOtp(verifyPayload);
+      const { data, error: err } = await supabase.auth.verifyOtp(payload);
+      if (err) throw err;
 
-      if (verifyError) throw verifyError;
-
-      // Read role from user metadata; fall back to querying profiles table
       let userRole = data.user?.user_metadata?.role as string | undefined;
-
       if (!userRole && data.user) {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("role")
-          .eq("id", data.user.id)
-          .single();
+        const { data: profile } = await supabase.from("profiles").select("role").eq("id", data.user.id).single();
         userRole = profile?.role;
       }
-
       router.push(`/dashboard/${userRole ?? "customer"}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Invalid or expired code");
@@ -97,167 +123,148 @@ function LoginContent() {
   };
 
   return (
-    <div className="px-4 py-8 max-w-sm mx-auto">
-      <div className="mb-6">
-        <Link href="/" className="text-[#FF6B00] text-sm">
+    <div className="min-h-screen bg-[#F5F5F7] flex flex-col">
+      {/* Top accent */}
+      <div className="h-1 bg-gradient-to-r from-[#FF6B00] to-[#FF4500]" />
+
+      <div className="flex-1 flex flex-col justify-center px-4 py-8 max-w-sm mx-auto w-full">
+        {/* Back */}
+        <Link href="/" className="flex items-center gap-1 text-[#FF6B00] text-sm font-semibold mb-8 w-fit hover:gap-2 transition-all">
           ← Back
         </Link>
-        <h1 className="text-2xl font-bold text-gray-800 mt-3 mb-1">
-          {step === "contact" ? "Login to Rozgar" : "Enter your OTP"}
-        </h1>
-        <p className="text-gray-500 text-sm">
-          {step === "contact"
-            ? "Enter your contact to receive a one-time code."
-            : `We sent a code to ${contact}`}
-        </p>
-      </div>
 
-      {step === "contact" && (
-        <>
-          {/* Mode toggle */}
-          <div className="flex rounded-xl overflow-hidden border-2 border-gray-200 mb-5">
-            <button
-              type="button"
-              onClick={() => { setMode("phone"); setError(""); }}
-              className={`flex-1 py-2.5 text-sm font-semibold transition-colors ${
-                mode === "phone" ? "bg-[#FF6B00] text-white" : "text-gray-500 bg-white"
-              }`}
-            >
-              📱 Phone
-            </button>
-            <button
-              type="button"
-              onClick={() => { setMode("email"); setError(""); }}
-              className={`flex-1 py-2.5 text-sm font-semibold transition-colors ${
-                mode === "email" ? "bg-[#FF6B00] text-white" : "text-gray-500 bg-white"
-              }`}
-            >
-              ✉️ Email
-            </button>
+        {/* Card */}
+        <div className="card rounded-3xl p-6">
+          {/* Header */}
+          <div className="mb-6">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#FF6B00] to-[#FF4500] flex items-center justify-center mb-4 shadow-md">
+              <span className="text-white text-xl">{step === "contact" ? "👋" : "🔐"}</span>
+            </div>
+            <h1 className="text-2xl font-black text-gray-900 mb-1">
+              {step === "contact" ? "Welcome back" : "Check your messages"}
+            </h1>
+            <p className="text-gray-500 text-sm">
+              {step === "contact"
+                ? "Sign in to your Rozgar account"
+                : `We sent a 6-digit code to ${contact}`}
+            </p>
           </div>
 
-          <form onSubmit={handleSendOtp}>
-            {mode === "phone" ? (
-              <div className="mb-4">
-                <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
-                  Phone Number
-                </label>
-                <input
-                  type="tel"
-                  placeholder="+91 98765 43210"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  required
-                  className="w-full border-2 border-gray-300 rounded-xl px-4 py-3 text-base focus:border-[#FF6B00] outline-none"
-                />
+          {step === "contact" && (
+            <>
+              {/* Mode toggle */}
+              <div className="flex rounded-2xl overflow-hidden bg-gray-100 p-1 mb-5 gap-1">
+                {(["phone", "email"] as AuthMode[]).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => { setMode(m); setError(""); }}
+                    className={`flex-1 py-2 text-sm font-bold rounded-xl transition-all ${
+                      mode === m
+                        ? "bg-white text-gray-900 shadow-sm"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    {m === "phone" ? "📱 Phone" : "✉️ Email"}
+                  </button>
+                ))}
               </div>
-            ) : (
-              <div className="mb-4">
-                <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  className="w-full border-2 border-gray-300 rounded-xl px-4 py-3 text-base focus:border-[#FF6B00] outline-none"
-                />
-              </div>
-            )}
 
-            {error && (
-              <div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-4">
-                <p className="text-red-600 text-sm">{error}</p>
-              </div>
-            )}
+              <form onSubmit={handleSendOtp} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 mb-1.5 uppercase tracking-wide">
+                    {mode === "phone" ? "Phone Number" : "Email Address"}
+                  </label>
+                  {mode === "phone" ? (
+                    <input
+                      type="tel"
+                      placeholder="+91 98765 43210"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      required
+                      className="input-field"
+                    />
+                  ) : (
+                    <input
+                      type="email"
+                      placeholder="you@example.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
+                      className="input-field"
+                    />
+                  )}
+                </div>
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-[#FF6B00] text-white rounded-xl py-4 font-bold text-base min-h-[52px] disabled:opacity-60"
-            >
-              {loading ? (
-                <span className="flex items-center justify-center gap-2">
-                  <span className="animate-spin">⏳</span> Sending OTP…
-                </span>
-              ) : (
-                "Send OTP →"
-              )}
-            </button>
-          </form>
-        </>
-      )}
+                {error && (
+                  <div className="bg-red-50 border border-red-200 rounded-2xl p-3 flex items-start gap-2">
+                    <span className="text-red-500 text-sm mt-0.5">⚠</span>
+                    <p className="text-red-600 text-sm">{error}</p>
+                  </div>
+                )}
 
-      {step === "otp" && (
-        <form onSubmit={handleVerify}>
-          <input
-            type="tel"
-            inputMode="numeric"
-            maxLength={6}
-            placeholder="• • • • • •"
-            value={token}
-            onChange={(e) => setToken(e.target.value.replace(/\D/g, "").slice(0, 6))}
-            className="w-full border-2 border-gray-300 rounded-xl px-4 py-4 text-3xl tracking-[0.5em] text-center mb-5 focus:border-[#FF6B00] outline-none font-mono"
-            autoFocus
-          />
-
-          {error && (
-            <div className="bg-red-50 border border-red-200 rounded-xl p-3 mb-4">
-              <p className="text-red-600 text-sm">{error}</p>
-            </div>
+                <button type="submit" disabled={loading} className="btn-primary w-full py-3.5 text-sm min-h-[52px]">
+                  {loading ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Sending…
+                    </span>
+                  ) : "Send OTP →"}
+                </button>
+              </form>
+            </>
           )}
 
-          <button
-            type="submit"
-            disabled={loading || token.length !== 6}
-            className="w-full bg-[#FF6B00] text-white rounded-xl py-4 font-bold text-base min-h-[52px] disabled:opacity-60"
-          >
-            {loading ? (
-              <span className="flex items-center justify-center gap-2">
-                <span className="animate-spin">⏳</span> Verifying…
-              </span>
-            ) : (
-              "Verify & Login →"
-            )}
-          </button>
+          {step === "otp" && (
+            <form onSubmit={handleVerify} className="space-y-5">
+              <OTPBoxes value={token} onChange={setToken} />
 
-          <button
-            type="button"
-            onClick={() => { setStep("contact"); setToken(""); setError(""); }}
-            className="w-full mt-3 text-gray-500 text-sm py-2"
-          >
-            ← Change contact
-          </button>
-        </form>
-      )}
+              {error && (
+                <div className="bg-red-50 border border-red-200 rounded-2xl p-3 flex items-start gap-2">
+                  <span className="text-red-500 text-sm mt-0.5">⚠</span>
+                  <p className="text-red-600 text-sm">{error}</p>
+                </div>
+              )}
 
-      <p className="text-center text-sm text-gray-500 mt-5">
-        New to Rozgar?{" "}
-        <Link
-          href={`/auth/signup${role ? `?role=${role}` : ""}`}
-          className="text-[#FF6B00] font-semibold"
-        >
-          Sign Up
-        </Link>
-      </p>
+              <button type="submit" disabled={loading || token.length !== 6} className="btn-primary w-full py-3.5 text-sm min-h-[52px]">
+                {loading ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Verifying…
+                  </span>
+                ) : "Verify & Login →"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setStep("contact"); setToken(""); setError(""); }}
+                className="w-full text-gray-400 text-sm py-2 font-medium hover:text-gray-600 transition-colors"
+              >
+                ← Change contact
+              </button>
+            </form>
+          )}
+        </div>
+
+        <p className="text-center text-sm text-gray-500 mt-5">
+          New to Rozgar?{" "}
+          <Link href={`/auth/signup${role ? `?role=${role}` : ""}`} className="text-[#FF6B00] font-bold hover:underline">
+            Sign Up Free
+          </Link>
+        </p>
+      </div>
     </div>
   );
 }
 
 export default function LoginPage() {
   return (
-    <div className="min-h-screen bg-white">
-      <Suspense
-        fallback={
-          <div className="flex items-center justify-center min-h-screen text-gray-400">
-            <span className="animate-pulse text-4xl">⏳</span>
-          </div>
-        }
-      >
-        <LoginContent />
-      </Suspense>
-    </div>
+    <Suspense fallback={
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="w-8 h-8 border-2 border-[#FF6B00]/30 border-t-[#FF6B00] rounded-full animate-spin" />
+      </div>
+    }>
+      <LoginContent />
+    </Suspense>
   );
 }
