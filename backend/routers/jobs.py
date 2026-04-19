@@ -1,13 +1,39 @@
-"""Job lifecycle endpoints — create, broadcast, and fetch jobs."""
-
+"""Job lifecycle endpoints — create, broadcast, fetch, complete."""
+import uuid as _uuid
 import httpx
 from fastapi import APIRouter, Form, UploadFile, File, HTTPException
 from database import supabase
-from config import AI_SERVICE_URL
+from config import AI_SERVICE_URL, SUPABASE_URL, SUPABASE_ANON_KEY
 
 router = APIRouter()
+_AI_TIMEOUT = 40.0
 
-_AI_TIMEOUT = 30.0
+
+async def _upload_photo(image_bytes: bytes, filename: str, content_type: str) -> str | None:
+    """Upload photo bytes to Supabase Storage. Returns public URL or None on failure."""
+    ext = (filename or "photo.jpg").rsplit(".", 1)[-1].lower()
+    if ext not in {"jpg", "jpeg", "png", "webp", "gif"}:
+        ext = "jpg"
+    storage_key = f"{_uuid.uuid4()}.{ext}"
+    upload_url = f"{SUPABASE_URL}/storage/v1/object/job-photos/{storage_key}"
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(
+            upload_url,
+            headers={
+                "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                "Content-Type": content_type or "image/jpeg",
+                "x-upsert": "true",
+            },
+            content=image_bytes,
+        )
+
+    if resp.status_code in (200, 201):
+        return f"{SUPABASE_URL}/storage/v1/object/public/job-photos/{storage_key}"
+
+    # Non-fatal — log and continue without photo URL
+    print(f"[WARN] Storage upload failed {resp.status_code}: {resp.text[:200]}")
+    return None
 
 
 @router.post("/create")
@@ -17,153 +43,194 @@ async def create_job(
     photo: UploadFile = File(...),
 ):
     """
-    Create a new job by uploading a photo and category.
-
-    Calls the AI service to analyse the image and extract scope, price range,
-    and complexity, then persists the job in Supabase with status 'pending'.
+    1. Read image bytes
+    2. Call AI service for analysis (parses nested result correctly)
+    3. Upload photo to Supabase Storage
+    4. Insert job row with real photo_url
     """
+    if not category.strip():
+        raise HTTPException(422, {"success": False, "error": "category is required"})
+    pin = pin_code.strip()
+    if len(pin) != 6 or not pin.isdigit():
+        raise HTTPException(422, {"success": False, "error": "pin_code must be 6 digits"})
+
     try:
         image_bytes = await photo.read()
+        if not image_bytes:
+            raise HTTPException(422, {"success": False, "error": "photo is empty"})
 
+        # ── AI analysis ──────────────────────────────────────
         async with httpx.AsyncClient(timeout=_AI_TIMEOUT) as client:
-            ai_response = await client.post(
+            ai_resp = await client.post(
                 f"{AI_SERVICE_URL}/ai/analyse",
                 files={"image": (photo.filename, image_bytes, photo.content_type)},
                 data={"category": category},
             )
-            ai_response.raise_for_status()
-            ai_data = ai_response.json()
+            ai_resp.raise_for_status()
 
-        job_payload = {
-            "category": category,
-            "pin_code": pin_code,
-            "photo_url": photo.filename,
-            "scope": ai_data.get("scope"),
-            "price_min": ai_data.get("price_min"),
-            "price_max": ai_data.get("price_max"),
-            "complexity": ai_data.get("complexity"),
-            "status": "pending",
-            "matched_worker_id": None,
+        ai_json = ai_resp.json()
+        # AI service returns {"success": true, "result": {...}}  ← BUG WAS HERE
+        # Previously code read ai_data.get("scope") directly = always None
+        result = ai_json.get("result") or {}
+        scope      = result.get("scope")
+        price_min  = result.get("price_min")
+        price_max  = result.get("price_max")
+        complexity = result.get("complexity")
+
+        # ── Upload photo to Storage ──────────────────────────
+        photo_url = await _upload_photo(
+            image_bytes,
+            photo.filename or "photo.jpg",
+            photo.content_type or "image/jpeg",
+        )
+
+        # ── Persist job ──────────────────────────────────────
+        payload = {
+            "category":  category.strip(),
+            "pin_code":  pin,
+            "photo_url": photo_url,
+            "scope":     scope,
+            "price_min": price_min,
+            "price_max": price_max,
+            "complexity": complexity,
+            "status":    "pending",
         }
-
-        result = supabase.table("jobs").insert(job_payload).execute()
-        job = result.data[0] if result.data else job_payload
-
+        db = supabase.table("jobs").insert(payload).execute()
+        job = db.data[0] if db.data else payload
         return {"success": True, "data": job}
 
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(status_code=422, detail={"success": False, "error": str(exc)})
+        raise HTTPException(422, {"success": False, "error": str(exc)})
 
 
 @router.post("/broadcast/{job_id}")
 async def broadcast_job(job_id: str):
-    """
-    Broadcast a job to all available workers in the same pin_code.
-
-    Smartphone workers are notified via WhatsApp; keypad workers via SMS.
-    A notification row is inserted for every worker reached.
-    Job status is updated to 'broadcast'.
-    """
+    """Notify all available workers in job's pin_code via WhatsApp or SMS."""
     try:
-        job_result = supabase.table("jobs").select("*").eq("id", job_id).single().execute()
-        job = job_result.data
+        jr = supabase.table("jobs").select("*").eq("id", job_id).single().execute()
+        job = jr.data
         if not job:
-            raise HTTPException(status_code=422, detail={"success": False, "error": "Job not found"})
+            raise HTTPException(404, {"success": False, "error": "Job not found"})
+        if job["status"] not in ("pending", "broadcast"):
+            raise HTTPException(422, {"success": False, "error": f"Job status is '{job['status']}', cannot broadcast"})
 
-        workers_result = (
+        wr = (
             supabase.table("workers")
             .select("*")
             .eq("pin_code", job["pin_code"])
             .eq("is_available", True)
             .execute()
         )
-        workers = workers_result.data or []
-
-        notified_count = 0
-        notification_rows = []
+        workers = wr.data or []
+        notified, rows = 0, []
 
         async with httpx.AsyncClient(timeout=_AI_TIMEOUT) as client:
-            for worker in workers:
+            for w in workers:
+                channel, status = "unknown", "failed"
                 try:
-                    if worker.get("type") == "smartphone":
-                        resp = await client.post(
+                    if w.get("type") == "smartphone":
+                        r = await client.post(
                             f"{AI_SERVICE_URL}/notify/whatsapp",
                             data={
-                                "to_number": worker["phone"],
-                                "job_photo_url": job.get("photo_url", ""),
-                                "scope": job.get("scope", ""),
-                                "price_min": str(job.get("price_min", "")),
-                                "price_max": str(job.get("price_max", "")),
-                                "language": worker.get("language", "hindi"),
+                                "to_number":     w["phone"],
+                                "job_photo_url": job.get("photo_url") or "",
+                                "scope":         job.get("scope") or "",
+                                "price_min":     str(job.get("price_min") or 0),
+                                "price_max":     str(job.get("price_max") or 0),
+                                "language":      w.get("language", "hindi"),
                             },
                         )
                         channel = "whatsapp"
+                        status  = "sent" if r.is_success else "failed"
                     else:
-                        hindi_message = (
-                            f"Rozgar: Naya kaam mila! Kaam: {job.get('scope', 'details unavailable')}. "
-                            f"Daam: {job.get('price_min')}–{job.get('price_max')} rupaye. "
-                            "Accept karne ke liye reply karein."
+                        body = (
+                            f"Rozgar: Naya kaam! {job.get('scope','Kaam available')}. "
+                            f"Daam: Rs.{job.get('price_min',0)}-{job.get('price_max',0)}. "
+                            "ACCEPT likhein."
                         )
-                        resp = await client.post(
+                        r = await client.post(
                             f"{AI_SERVICE_URL}/notify/sms",
-                            data={"to_number": worker["phone"], "message": hindi_message},
+                            data={"to_number": w["phone"], "message": body},
                         )
                         channel = "sms"
+                        status  = "sent" if r.is_success else "failed"
+                except Exception as e:
+                    print(f"[WARN] notify failed for worker {w.get('id')}: {e}")
 
-                    notify_status = "sent" if resp.is_success else "failed"
-                except Exception:
-                    notify_status = "failed"
-                    channel = "unknown"
+                rows.append({"job_id": job_id, "worker_id": w["id"], "channel": channel, "status": status})
+                notified += 1
 
-                notification_rows.append(
-                    {
-                        "job_id": job_id,
-                        "worker_id": worker["id"],
-                        "channel": channel,
-                        "status": notify_status,
-                    }
-                )
-                notified_count += 1
-
-        if notification_rows:
-            supabase.table("notifications").insert(notification_rows).execute()
+        if rows:
+            supabase.table("notifications").insert(rows).execute()
 
         supabase.table("jobs").update({"status": "broadcast"}).eq("id", job_id).execute()
-
-        return {"success": True, "data": {"job_id": job_id, "notified_count": notified_count}}
+        return {"success": True, "data": {"job_id": job_id, "notified_count": notified}}
 
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=422, detail={"success": False, "error": str(exc)})
+        raise HTTPException(422, {"success": False, "error": str(exc)})
+
+
+@router.get("/list")
+async def list_jobs(status: str | None = None, pin_code: str | None = None, limit: int = 50):
+    """List jobs with optional filters."""
+    try:
+        q = supabase.table("jobs").select("*").order("created_at", desc=True).limit(limit)
+        if status:   q = q.eq("status", status)
+        if pin_code: q = q.eq("pin_code", pin_code)
+        r = q.execute()
+        return {"success": True, "data": r.data or []}
+    except Exception as exc:
+        raise HTTPException(422, {"success": False, "error": str(exc)})
 
 
 @router.get("/{job_id}")
 async def get_job(job_id: str):
-    """
-    Fetch a single job by ID.
-
-    If the job is matched, the matched worker's details are included in the response.
-    """
+    """Fetch a single job; includes matched_worker if matched."""
     try:
-        job_result = supabase.table("jobs").select("*").eq("id", job_id).single().execute()
-        job = job_result.data
+        jr = supabase.table("jobs").select("*").eq("id", job_id).single().execute()
+        job = jr.data
         if not job:
-            raise HTTPException(status_code=422, detail={"success": False, "error": "Job not found"})
+            raise HTTPException(404, {"success": False, "error": "Job not found"})
 
         if job.get("matched_worker_id"):
-            worker_result = (
+            wr = (
                 supabase.table("workers")
-                .select("*")
+                .select("id,name,phone,language,type,pin_code")
                 .eq("id", job["matched_worker_id"])
                 .single()
                 .execute()
             )
-            job["matched_worker"] = worker_result.data
+            job["matched_worker"] = wr.data
 
         return {"success": True, "data": job}
-
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=422, detail={"success": False, "error": str(exc)})
+        raise HTTPException(422, {"success": False, "error": str(exc)})
+
+
+@router.patch("/{job_id}/complete")
+async def complete_job(job_id: str):
+    """Customer marks job as completed."""
+    try:
+        jr = supabase.table("jobs").select("id,status,matched_worker_id").eq("id", job_id).single().execute()
+        if not jr.data:
+            raise HTTPException(404, {"success": False, "error": "Job not found"})
+        if jr.data["status"] != "matched":
+            raise HTTPException(422, {"success": False, "error": "Only matched jobs can be completed"})
+
+        supabase.table("jobs").update({"status": "completed"}).eq("id", job_id).execute()
+
+        # Re-enable worker
+        if jr.data.get("matched_worker_id"):
+            supabase.table("workers").update({"is_available": True}).eq("id", jr.data["matched_worker_id"]).execute()
+
+        return {"success": True, "data": {"message": "Job completed", "job_id": job_id}}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(422, {"success": False, "error": str(exc)})
