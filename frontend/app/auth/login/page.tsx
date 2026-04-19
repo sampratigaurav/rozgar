@@ -4,9 +4,38 @@ import { Suspense, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
 
 type AuthMode = "phone" | "email";
 type Step = "contact" | "otp";
+
+const loginSchema = z.object({
+  mode: z.enum(["phone", "email"]),
+  phone: z.string().optional(),
+  email: z.string().optional(),
+}).superRefine((data, ctx) => {
+  if (data.mode === "phone") {
+    if (!data.phone || data.phone.trim().replace(/\s+/g, "").length < 10) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Enter a valid phone number.",
+        path: ["phone"],
+      });
+    }
+  } else {
+    if (!data.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Enter a valid email address.",
+        path: ["email"],
+      });
+    }
+  }
+});
+
+type LoginFormValues = z.infer<typeof loginSchema>;
 
 function OTPBoxes({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -58,33 +87,46 @@ function LoginContent() {
   const router = useRouter();
   const supabase = createClient();
 
-  const [mode, setMode] = useState<AuthMode>("phone");
   const [step, setStep] = useState<Step>("contact");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
   const [token, setToken] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const contact = mode === "phone" ? phone : email;
+  const {
+    register,
+    handleSubmit,
+    watch,
+    setValue,
+    getValues,
+    formState: { errors },
+  } = useForm<LoginFormValues>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: {
+      mode: "phone",
+      phone: "",
+      email: "",
+    },
+  });
 
-  const handleSendOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const mode = watch("mode");
+  const contact = mode === "phone" ? getValues("phone")! : getValues("email")!;
+
+  const onSendOtp = async (data: LoginFormValues) => {
     setLoading(true);
     setError("");
     try {
-      if (mode === "phone") {
-        // Strict E.164 formatting: Remove spaces and prepend +91 if missing
-        let formattedPhone = phone.trim().replace(/\s+/g, "");
+      if (data.mode === "phone") {
+        let formattedPhone = data.phone!.trim().replace(/\s+/g, "");
         if (!formattedPhone.startsWith("+")) {
           formattedPhone = `+91${formattedPhone}`;
         }
-        setPhone(formattedPhone);
+        // Force the formatted value back into the form so that verify payload is correct
+        setValue("phone", formattedPhone);
 
         const { error: err } = await supabase.auth.signInWithOtp({ phone: formattedPhone });
         if (err) {
           if (err.message.toLowerCase().includes("twilio") || err.message.toLowerCase().includes("sms") || err.message.toLowerCase().includes("phone provider")) {
-            setMode("email");
+            setValue("mode", "email");
             setError("Phone OTP unavailable. Please use email instead.");
             setLoading(false);
             return;
@@ -92,7 +134,7 @@ function LoginContent() {
           throw err;
         }
       } else {
-        const { error: err } = await supabase.auth.signInWithOtp({ email });
+        const { error: err } = await supabase.auth.signInWithOtp({ email: data.email! });
         if (err) throw err;
       }
       setStep("otp");
@@ -165,7 +207,7 @@ function LoginContent() {
                   <button
                     key={m}
                     type="button"
-                    onClick={() => { setMode(m); setError(""); }}
+                    onClick={() => { setValue("mode", m); setError(""); }}
                     className={`flex-1 py-2 text-sm font-bold rounded-xl transition-all ${
                       mode === m
                         ? "bg-white text-gray-900 shadow-sm"
@@ -177,29 +219,31 @@ function LoginContent() {
                 ))}
               </div>
 
-              <form onSubmit={handleSendOtp} className="space-y-4">
+              <form onSubmit={handleSubmit(onSendOtp)} className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold text-gray-500 mb-1.5 uppercase tracking-wide">
                     {mode === "phone" ? "Phone Number" : "Email Address"}
                   </label>
                   {mode === "phone" ? (
-                    <input
-                      type="tel"
-                      placeholder="+91 98765 43210"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      required
-                      className="input-field"
-                    />
+                    <>
+                      <input
+                        type="tel"
+                        placeholder="+91 98765 43210"
+                        {...register("phone")}
+                        className={`input-field ${errors.phone ? "border-red-500" : ""}`}
+                      />
+                      {errors.phone && <p className="text-red-500 text-xs mt-1">{errors.phone.message}</p>}
+                    </>
                   ) : (
-                    <input
-                      type="email"
-                      placeholder="you@example.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      required
-                      className="input-field"
-                    />
+                    <>
+                      <input
+                        type="email"
+                        placeholder="you@example.com"
+                        {...register("email")}
+                        className={`input-field ${errors.email ? "border-red-500" : ""}`}
+                      />
+                      {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email.message}</p>}
+                    </>
                   )}
                 </div>
 

@@ -1,11 +1,41 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
 
 type AuthMode = "phone" | "email";
+
+const signupSchema = z.object({
+  mode: z.enum(["phone", "email"]),
+  phone: z.string().optional(),
+  email: z.string().optional(),
+}).superRefine((data, ctx) => {
+  if (data.mode === "phone") {
+    // E.164 rough validation
+    if (!data.phone || data.phone.trim().replace(/\s+/g, "").length < 10) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Enter a valid phone number (at least 10 digits).",
+        path: ["phone"],
+      });
+    }
+  } else {
+    if (!data.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Enter a valid email address.",
+        path: ["email"],
+      });
+    }
+  }
+});
+
+type SignupFormValues = z.infer<typeof signupSchema>;
 
 const ROLE_META: Record<string, { label: string; icon: string; color: string }> = {
   customer: { label: "Customer",      icon: "🏠", color: "from-orange-500 to-red-500" },
@@ -21,40 +51,51 @@ function SignupContent() {
 
   const roleMeta = ROLE_META[role] ?? ROLE_META.customer;
 
-  const [mode, setMode] = useState<AuthMode>("phone");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const {
+    register,
+    handleSubmit,
+    watch,
+    setValue,
+    formState: { errors },
+  } = useForm<SignupFormValues>({
+    resolver: zodResolver(signupSchema),
+    defaultValues: {
+      mode: "phone",
+      phone: "",
+      email: "",
+    },
+  });
+
+  const mode = watch("mode");
+
+  const onSubmit = async (data: SignupFormValues) => {
     setLoading(true);
     setError("");
     try {
-      if (mode === "phone") {
-        // Strict E.164 formatting: Remove spaces and prepend +91 if missing
-        let formattedPhone = phone.trim().replace(/\s+/g, "");
+      if (data.mode === "phone") {
+        let formattedPhone = data.phone!.trim().replace(/\s+/g, "");
         if (!formattedPhone.startsWith("+")) {
           formattedPhone = `+91${formattedPhone}`;
         }
-        setPhone(formattedPhone);
-
+        
         const { error: err } = await supabase.auth.signInWithOtp({ phone: formattedPhone, options: { data: { role } } });
         if (err) {
           if (err.message.toLowerCase().includes("twilio") || err.message.toLowerCase().includes("sms") || err.message.toLowerCase().includes("phone provider")) {
-            setMode("email");
+            setValue("mode", "email");
             setError("Phone OTP is not available. Please use email instead.");
             setLoading(false);
             return;
           }
           throw err;
         }
-        router.push(`/auth/verify?phone=${encodeURIComponent(phone)}&role=${role}&mode=phone`);
+        router.push(`/auth/verify?phone=${encodeURIComponent(formattedPhone)}&role=${role}&mode=phone`);
       } else {
-        const { error: err } = await supabase.auth.signInWithOtp({ email, options: { data: { role } } });
+        const { error: err } = await supabase.auth.signInWithOtp({ email: data.email!, options: { data: { role } } });
         if (err) throw err;
-        router.push(`/auth/verify?email=${encodeURIComponent(email)}&role=${role}&mode=email`);
+        router.push(`/auth/verify?email=${encodeURIComponent(data.email!)}&role=${role}&mode=email`);
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -77,18 +118,7 @@ function SignupContent() {
           <div className={`inline-flex items-center gap-2 bg-gradient-to-r ${roleMeta.color} text-white text-xs font-bold px-3 py-1.5 rounded-xl mb-4`}>
             <span>{roleMeta.icon}</span>
             <span>Signing up as {roleMeta.label}</span>
-          </div>
-
-          <h1 className="text-2xl font-black text-gray-900 mb-1">Create account</h1>
-          <p className="text-gray-500 text-sm mb-6">We'll send a one-time code to verify you.</p>
-
-          {/* Mode toggle */}
-          <div className="flex rounded-2xl overflow-hidden bg-gray-100 p-1 mb-5 gap-1">
-            {(["phone", "email"] as AuthMode[]).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => { setMode(m); setError(""); }}
+          </div>Value("mode", m); setError(""); }}
                 className={`flex-1 py-2 text-sm font-bold rounded-xl transition-all ${
                   mode === m
                     ? "bg-white text-gray-900 shadow-sm"
@@ -100,7 +130,7 @@ function SignupContent() {
             ))}
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-gray-500 mb-1.5 uppercase tracking-wide">
                 {mode === "phone" ? "Phone Number" : "Email Address"}
@@ -110,11 +140,22 @@ function SignupContent() {
                   <input
                     type="tel"
                     placeholder="+91 98765 43210"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    required
-                    className="input-field"
+                    {...register("phone")}
+                    className={`input-field ${errors.phone ? "border-red-500" : ""}`}
                   />
+                  {errors.phone && <p className="text-red-500 text-xs mt-1">{errors.phone.message}</p>}
+                  <p className="text-xs text-gray-400 mt-1">Include country code, e.g. +91</p>
+                </>
+              ) : (
+                <>
+                  <input
+                    type="email"
+                    placeholder="you@example.com"
+                    {...register("email")}
+                    className={`input-field ${errors.email ? "border-red-500" : ""}`}
+                  />
+                  {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email.message}</p>}
+                <  />
                   <p className="text-xs text-gray-400 mt-1">Include country code, e.g. +91</p>
                 </>
               ) : (
