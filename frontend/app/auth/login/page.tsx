@@ -74,7 +74,14 @@ function LoginContent() {
     setError("");
     try {
       if (mode === "phone") {
-        const { error: err } = await supabase.auth.signInWithOtp({ phone });
+        // Strict E.164 formatting: Remove spaces and prepend +91 if missing
+        let formattedPhone = phone.trim().replace(/\s+/g, "");
+        if (!formattedPhone.startsWith("+")) {
+          formattedPhone = `+91${formattedPhone}`;
+        }
+        setPhone(formattedPhone);
+
+        const { error: err } = await supabase.auth.signInWithOtp({ phone: formattedPhone });
         if (err) {
           if (err.message.toLowerCase().includes("twilio") || err.message.toLowerCase().includes("sms") || err.message.toLowerCase().includes("phone provider")) {
             setMode("email");
