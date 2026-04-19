@@ -1,7 +1,6 @@
 import { createClient } from "./supabase";
 
 const BACKEND_URL = (process.env.NEXT_PUBLIC_BACKEND_URL ?? "").replace(/\/$/, "");
-const AI_URL      = (process.env.NEXT_PUBLIC_AI_URL      ?? "").replace(/\/$/, "");
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -81,8 +80,15 @@ async function handleResponse<T>(res: Response): Promise<T> {
 }
 
 // ─────────────────────────────────────────────────────────────
-// AIheaders = await getAuthHeaders();
-  const res  = await fetch(`${AI_URL}/ai/analyse`, { method: "POST", body: form, headers });
+// AI
+// ─────────────────────────────────────────────────────────────
+
+export async function analyseImage(image: File, category: string): Promise<AIAnalysisResult> {
+  const form = new FormData();
+  form.append("image", image);
+  form.append("category", category);
+  const headers = await getAuthHeaders();
+  const res  = await fetch(`${BACKEND_URL}/ai/analyse`, { method: "POST", body: form, headers });
   const body = await res.json().catch(() => { throw new Error("AI service unavailable"); });
   if (!res.ok || !body.success) throw new Error(body.error ?? "AI analysis failed");
   return body.result as AIAnalysisResult;

@@ -2,9 +2,13 @@
 import uuid as _uuid
 import httpx
 from fastapi import APIRouter, Form, UploadFile, File, HTTPException, Depends
+from fastapi.concurrency import run_in_threadpool
 from database import supabase
-from config import AI_SERVICE_URL, SUPABASE_URL, SUPABASE_ANON_KEY
+from config import SUPABASE_URL, SUPABASE_ANON_KEY
 from dependencies import get_current_user
+from gemini import analyse_job_photo
+from twilio_whatsapp import send_whatsapp
+from twilio_sms import send_sms
 
 router = APIRouter()
 _AI_TIMEOUT = 40.0
@@ -62,18 +66,9 @@ async def create_job(
             raise HTTPException(422, {"success": False, "error": "photo is empty"})
 
         # ── AI analysis ──────────────────────────────────────
-        async with httpx.AsyncClient(timeout=_AI_TIMEOUT) as client:
-            ai_resp = await client.post(
-                f"{AI_SERVICE_URL}/ai/analyse",
-                files={"image": (photo.filename, image_bytes, photo.content_type)},
-                data={"category": category},
-            )
-            ai_resp.raise_for_status()
-
-        ai_json = ai_resp.json()
-        # AI service returns {"success": true, "result": {...}}  ← BUG WAS HERE
-        # Previously code read ai_data.get("scope") directly = always None
-        result = ai_json.get("result") or {}
+        # Run Gemini locally in a thread pool to avoid blocking Event Loop
+        result = await run_in_threadpool(analyse_job_photo, image_bytes, category)
+        
         scope      = result.get("scope")
         price_min  = result.get("price_min")
         price_max  = result.get("price_max")
@@ -128,41 +123,35 @@ async def broadcast_job(job_id: str, user=Depends(get_current_user)):
         workers = wr.data or []
         notified, rows = 0, []
 
-        async with httpx.AsyncClient(timeout=_AI_TIMEOUT) as client:
-            for w in workers:
-                channel, status = "unknown", "failed"
-                try:
-                    if w.get("type") == "smartphone":
-                        r = await client.post(
-                            f"{AI_SERVICE_URL}/notify/whatsapp",
-                            data={
-                                "to_number":     w["phone"],
-                                "job_photo_url": job.get("photo_url") or "",
-                                "scope":         job.get("scope") or "",
-                                "price_min":     str(job.get("price_min") or 0),
-                                "price_max":     str(job.get("price_max") or 0),
-                                "language":      w.get("language", "hindi"),
-                            },
-                        )
-                        channel = "whatsapp"
-                        status  = "sent" if r.is_success else "failed"
-                    else:
-                        body = (
-                            f"Rozgar: Naya kaam! {job.get('scope','Kaam available')}. "
-                            f"Daam: Rs.{job.get('price_min',0)}-{job.get('price_max',0)}. "
-                            "ACCEPT likhein."
-                        )
-                        r = await client.post(
-                            f"{AI_SERVICE_URL}/notify/sms",
-                            data={"to_number": w["phone"], "message": body},
-                        )
-                        channel = "sms"
-                        status  = "sent" if r.is_success else "failed"
-                except Exception as e:
-                    print(f"[WARN] notify failed for worker {w.get('id')}: {e}")
+        for w in workers:
+            channel, status = "unknown", "failed"
+            try:
+                if w.get("type") == "smartphone":
+                    await run_in_threadpool(
+                        send_whatsapp,
+                        to_number=w["phone"],
+                        job_photo_url=job.get("photo_url") or "",
+                        scope=job.get("scope") or "",
+                        price_min=int(job.get("price_min") or 0),
+                        price_max=int(job.get("price_max") or 0),
+                        language=w.get("language", "hindi")
+                    )
+                    channel = "whatsapp"
+                    status  = "sent"
+                else:
+                    body = (
+                        f"Rozgar: Naya kaam! {job.get('scope','Kaam available')}. "
+                        f"Daam: Rs.{job.get('price_min',0)}-{job.get('price_max',0)}. "
+                        "ACCEPT likhein."
+                    )
+                    await run_in_threadpool(send_sms, to_number=w["phone"], message=body)
+                    channel = "sms"
+                    status  = "sent"
+            except Exception as e:
+                print(f"[WARN] notify failed for worker {w.get('id')}: {e}")
 
-                rows.append({"job_id": job_id, "worker_id": w["id"], "channel": channel, "status": status})
-                notified += 1
+            rows.append({"job_id": job_id, "worker_id": w["id"], "channel": channel, "status": status})
+            notified += 1
 
         if rows:
             supabase.table("notifications").insert(rows).execute()

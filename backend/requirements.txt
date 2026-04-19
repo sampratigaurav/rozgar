@@ -4,3 +4,6 @@ supabase
 python-dotenv
 httpx
 python-multipart
+google-generativeai
+twilio
+pydantic

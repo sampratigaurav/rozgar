@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import jobs, workers, partners, admin
+from routers import jobs, workers, partners, admin, ai
 from config import FRONTEND_URL
 
 app = FastAPI(title="Rozgar Backend", version="1.0.0")
@@ -27,6 +27,7 @@ app.include_router(jobs.router,    prefix="/jobs")
 app.include_router(workers.router, prefix="/workers")
 app.include_router(partners.router, prefix="/partners")
 app.include_router(admin.router,   prefix="/admin")
+app.include_router(ai.router,      prefix="/ai")
 
 
 @app.get("/health")

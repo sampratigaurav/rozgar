@@ -17,6 +17,12 @@ def _require(key: str) -> str:
 
 SUPABASE_URL: str      = _require("SUPABASE_URL")
 SUPABASE_ANON_KEY: str = _require("SUPABASE_ANON_KEY")
-AI_SERVICE_URL: str    = os.getenv("AI_SERVICE_URL", "http://localhost:8000")
+GEMINI_API_KEY: str    = _require("GEMINI_API_KEY")
+TWILIO_ACCOUNT_SID: str = _require("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN: str = _require("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_NUMBER: str = _require("TWILIO_WHATSAPP_NUMBER")
+TWILIO_SMS_NUMBER: str = _require("TWILIO_SMS_NUMBER")
+TWILIO_PHONE_NUMBER: str = os.getenv("TWILIO_PHONE_NUMBER", TWILIO_WHATSAPP_NUMBER) # Fallback for IVR
+
 PORT: int              = int(os.getenv("PORT", "8001"))
 FRONTEND_URL: str      = os.getenv("FRONTEND_URL", "http://localhost:3000")
